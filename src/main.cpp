@@ -1,12 +1,24 @@
-#include <Arduino.h>
+#include <TinyWireM.h>
+#include <Tiny4kOLED.h>
+
+uint16_t count = 0;
 
 void setup() {
-  pinMode(PB1, OUTPUT);
+  TinyWireM.begin();
+  oled.begin();
+  oled.clear();
+  oled.on();
+  oled.setCursor(0, 0);
+  oled.print("HELLO");
+  oled.switchFrame();
 }
 
 void loop() {
-  digitalWrite(PB1, HIGH);
-  delay(500);
-  digitalWrite(PB1, LOW);
-  delay(500);
+  oled.clear();
+  oled.setCursor(0, 0);
+  oled.print("HELLO");
+  oled.setCursor(0, 3);
+  oled.print(count++);
+  oled.switchFrame();
+  delay(1000);
 }
