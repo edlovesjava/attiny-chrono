@@ -7,6 +7,55 @@
 #define BTN_START PB4
 #define BUZZER    PB1
 
+#define DEBOUNCE_MS    50
+#define LONG_PRESS_MS  600
+
+struct Button {
+  uint8_t pin;
+  bool lastRaw;
+  bool pressed;
+  uint32_t pressStart;
+  bool handled;
+};
+
+enum ButtonEvent { EVT_NONE, EVT_SHORT, EVT_LONG };
+
+Button btnA = { BTN_SET,   false, false, 0, false };
+Button btnB = { BTN_START, false, false, 0, false };
+
+ButtonEvent readButton(Button &b) {
+  bool raw = !digitalRead(b.pin);
+  ButtonEvent evt = EVT_NONE;
+
+  // Detect press start with debounce
+  if (raw && !b.pressed) {
+    if (!b.lastRaw) {
+      b.pressStart = millis();
+    } else if (millis() - b.pressStart >= DEBOUNCE_MS) {
+      b.pressed = true;
+      b.handled = false;
+    }
+  }
+
+  // Detect long press while held
+  if (b.pressed && !b.handled && raw &&
+      millis() - b.pressStart >= LONG_PRESS_MS) {
+    evt = EVT_LONG;
+    b.handled = true;
+  }
+
+  // Detect short press on release
+  if (b.pressed && !raw) {
+    if (!b.handled && millis() - b.pressStart >= DEBOUNCE_MS) {
+      evt = EVT_SHORT;
+    }
+    b.pressed = false;
+  }
+
+  b.lastRaw = raw;
+  return evt;
+}
+
 volatile bool wakeFlag = false;
 
 enum State {
@@ -97,19 +146,17 @@ void loop() {
     updateDisplay();
   }
 
-  // Button handling
-  bool setPressed = !digitalRead(BTN_SET);
-  bool startPressed = !digitalRead(BTN_START);
+  ButtonEvent evtA = readButton(btnA);
+  ButtonEvent evtB = readButton(btnB);
 
-  if (setPressed) {
+  if (evtA == EVT_SHORT) {
     targetSeconds += 60;
     lastActivity = millis();
     state = SETTING;
     updateDisplay();
-    delay(200);
   }
 
-  if (startPressed) {
+  if (evtB == EVT_SHORT) {
     if (state == RUNNING) {
       state = IDLE;
     } else {
@@ -118,7 +165,6 @@ void loop() {
     }
     lastActivity = millis();
     updateDisplay();
-    delay(200);
   }
 
   // Timer logic
