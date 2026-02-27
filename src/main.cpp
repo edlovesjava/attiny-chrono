@@ -210,22 +210,42 @@ void loop() {
   }
 
   if (currentMode == MODE_TIMER) {
-    if (evtA == EVT_SHORT) {
-      targetSeconds += 60;
-      lastActivity = millis();
-      subState = SUB_SETTING;
-      updateDisplay();
-    }
-
-    if (evtB == EVT_SHORT) {
-      if (subState == SUB_RUNNING) {
+    if (subState == SUB_DONE) {
+      // Any press dismisses alarm
+      if (evtA != EVT_NONE || evtB != EVT_NONE) {
         subState = SUB_IDLE;
-      } else {
+        lastActivity = millis();
+        updateDisplay();
+      }
+    } else if (subState == SUB_RUNNING) {
+      // Long B stops the timer
+      if (evtB == EVT_LONG) {
+        subState = SUB_IDLE;
+        lastActivity = millis();
+        updateDisplay();
+      }
+    } else {
+      // IDLE or SETTING: adjust time
+      if (evtA == EVT_SHORT) {
+        if (targetSeconds < 5940) targetSeconds += 60; // cap 99 min
+        subState = SUB_SETTING;
+        lastActivity = millis();
+        updateDisplay();
+      }
+      if (evtB == EVT_SHORT) {
+        if (targetSeconds >= 60) targetSeconds -= 60;
+        subState = SUB_SETTING;
+        lastActivity = millis();
+        updateDisplay();
+      }
+      // Long B starts the timer
+      if (evtB == EVT_LONG && targetSeconds > 0) {
         currentSeconds = targetSeconds;
         subState = SUB_RUNNING;
+        lastActivity = millis();
+        beep();
+        updateDisplay();
       }
-      lastActivity = millis();
-      updateDisplay();
     }
 
     // Timer countdown tick
@@ -282,8 +302,19 @@ void loop() {
     }
   }
 
-  // Auto-sleep after inactivity
-  if (millis() - lastActivity > 15000 && subState != SUB_RUNNING) {
+  // Repeating alarm when timer is done
+  if (currentMode == MODE_TIMER && subState == SUB_DONE) {
+    static uint32_t lastAlarmBeep = 0;
+    if (millis() - lastAlarmBeep >= 2000) {
+      beep();
+      lastAlarmBeep = millis();
+    }
+  }
+
+  // Auto-sleep after 15s inactivity (never during running/alarm)
+  if (millis() - lastActivity > 15000 &&
+      subState != SUB_RUNNING &&
+      subState != SUB_DONE) {
     isSleeping = true;
     goToSleep();
   }
