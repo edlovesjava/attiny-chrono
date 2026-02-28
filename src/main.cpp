@@ -59,7 +59,7 @@ ButtonEvent readButton(Button &b) {
 
 volatile bool wakeFlag = false;
 
-enum Mode { MODE_TIMER, MODE_STOPWATCH, MODE_COUNT };
+enum Mode { MODE_TIMER, MODE_STOPWATCH, MODE_CLOCK, MODE_COUNT };
 enum SubState { SUB_IDLE, SUB_SETTING, SUB_RUNNING, SUB_DONE };
 
 Mode currentMode = MODE_TIMER;
@@ -76,6 +76,9 @@ uint16_t swLapSecs = 0;     // last lap snapshot in seconds
 bool swLapVisible = false;   // whether to show lap time
 
 uint8_t rtcHour, rtcMin, rtcSec;
+
+uint8_t alarmHour = 0, alarmMin = 0;
+bool alarmEnabled = false;
 
 void goToSleep() {
   oled.off();
@@ -107,23 +110,6 @@ void setup() {
   oled.setFont(FONT8X16);
   oled.clear();
   oled.on();
-
-  // RTC hardware test: display time for 3 seconds
-  rtcRead(rtcHour, rtcMin, rtcSec);
-  oled.clear();
-  oled.setCursor(0, 0);
-  oled.print("RTC TEST");
-  oled.setCursor(0, 3);
-  if (rtcHour < 10) oled.print("0");
-  oled.print(rtcHour);
-  oled.print(":");
-  if (rtcMin < 10) oled.print("0");
-  oled.print(rtcMin);
-  oled.print(":");
-  if (rtcSec < 10) oled.print("0");
-  oled.print(rtcSec);
-  oled.on();
-  delay(3000);
 }
 
 void beep() {
@@ -228,6 +214,37 @@ void updateDisplay() {
     }
   }
 
+  if (currentMode == MODE_CLOCK) {
+    oled.setCursor(0, 0);
+    oled.print("CLOCK");
+
+    if (alarmEnabled) {
+      oled.setCursor(64, 0);
+      oled.print("A");
+      if (alarmHour < 10) oled.print("0");
+      oled.print(alarmHour);
+      oled.print(":");
+      if (alarmMin < 10) oled.print("0");
+      oled.print(alarmMin);
+    }
+
+    oled.setCursor(0, 3);
+    if (rtcHour < 10) oled.print("0");
+    oled.print(rtcHour);
+    oled.print(":");
+    if (rtcMin < 10) oled.print("0");
+    oled.print(rtcMin);
+    oled.print(":");
+    if (rtcSec < 10) oled.print("0");
+    oled.print(rtcSec);
+
+    if (alarmEnabled) {
+      drawSoftKeys("TIME", "OFF");
+    } else {
+      drawSoftKeys("TIME", "ALARM");
+    }
+  }
+
   oled.on();
 }
 
@@ -247,6 +264,7 @@ void loop() {
     oled.setFont(FONT8X16);
     oled.on();
     lastActivity = millis();
+    rtcRead(rtcHour, rtcMin, rtcSec);
     updateDisplay();
   }
 
@@ -360,6 +378,16 @@ void loop() {
     }
   }
 
+  // Clock mode: read RTC and refresh display at 1Hz
+  if (currentMode == MODE_CLOCK && subState == SUB_IDLE) {
+    static uint32_t lastClockRefresh = 0;
+    if (millis() - lastClockRefresh >= 1000) {
+      lastClockRefresh = millis();
+      rtcRead(rtcHour, rtcMin, rtcSec);
+      updateDisplay();
+    }
+  }
+
   // Repeating alarm when timer is done
   if (currentMode == MODE_TIMER && subState == SUB_DONE) {
     static uint32_t lastAlarmBeep = 0;
@@ -372,7 +400,8 @@ void loop() {
   // Auto-sleep after 15s inactivity (never during running/alarm)
   if (millis() - lastActivity > 15000 &&
       subState != SUB_RUNNING &&
-      subState != SUB_DONE) {
+      subState != SUB_DONE &&
+      currentMode != MODE_CLOCK) {
     isSleeping = true;
     goToSleep();
   }
