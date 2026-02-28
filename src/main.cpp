@@ -2,6 +2,7 @@
 #include <avr/interrupt.h>
 #include <TinyWireM.h>
 #include <Tiny4kOLED.h>
+#include <DS3231_Tiny.h>
 
 #define BTN_SET   PB3
 #define BTN_START PB4
@@ -74,6 +75,8 @@ uint32_t swAccum = 0;       // accumulated ms from previous runs
 uint16_t swLapSecs = 0;     // last lap snapshot in seconds
 bool swLapVisible = false;   // whether to show lap time
 
+uint8_t rtcHour, rtcMin, rtcSec;
+
 void goToSleep() {
   oled.off();
   oled.clear();
@@ -104,12 +107,40 @@ void setup() {
   oled.setFont(FONT8X16);
   oled.clear();
   oled.on();
+
+  // RTC hardware test: display time for 3 seconds
+  rtcRead(rtcHour, rtcMin, rtcSec);
+  oled.clear();
+  oled.setCursor(0, 0);
+  oled.print("RTC TEST");
+  oled.setCursor(0, 3);
+  if (rtcHour < 10) oled.print("0");
+  oled.print(rtcHour);
+  oled.print(":");
+  if (rtcMin < 10) oled.print("0");
+  oled.print(rtcMin);
+  oled.print(":");
+  if (rtcSec < 10) oled.print("0");
+  oled.print(rtcSec);
+  oled.on();
+  delay(3000);
 }
 
 void beep() {
   digitalWrite(BUZZER, LOW);
   delay(150);
   digitalWrite(BUZZER, HIGH);
+}
+
+void drawSoftKeys(const char* left, const char* right) {
+  oled.setCursor(0, 6);
+  oled.print(left);
+  // Right-align the right label (128px width, 8px per char)
+  uint8_t rightLen = 0;
+  while (right[rightLen]) rightLen++;
+  uint8_t rightX = 128 - (rightLen * 8);
+  oled.setCursor(rightX, 6);
+  oled.print(right);
 }
 
 void updateDisplay() {
@@ -139,6 +170,20 @@ void updateDisplay() {
     oled.print(":");
     if (secs < 10) oled.print("0");
     oled.print(secs);
+
+    // Soft-key labels for timer mode
+    if (subState == SUB_DONE) {
+      drawSoftKeys("OK", "OK");
+    } else if (subState == SUB_RUNNING) {
+      drawSoftKeys("", "STOP>");
+    } else {
+      // IDLE or SETTING
+      if (targetSeconds == 0) {
+        drawSoftKeys("+1m", "");
+      } else {
+        drawSoftKeys("+1m", "-1m  GO>");
+      }
+    }
   }
 
   if (currentMode == MODE_STOPWATCH) {
@@ -157,8 +202,9 @@ void updateDisplay() {
     if (secs < 10) oled.print("0");
     oled.print(secs);
 
+    // Lap time (moved to row 5 to make room for soft-keys)
     if (swLapVisible) {
-      oled.setCursor(0, 6);
+      oled.setCursor(0, 5);
       oled.print("LAP ");
       uint8_t lm = swLapSecs / 60;
       uint8_t ls = swLapSecs % 60;
@@ -167,6 +213,18 @@ void updateDisplay() {
       oled.print(":");
       if (ls < 10) oled.print("0");
       oled.print(ls);
+    }
+
+    // Soft-key labels for stopwatch mode
+    if (subState == SUB_RUNNING) {
+      drawSoftKeys("LAP", "STOP");
+    } else {
+      // IDLE
+      if (swAccum == 0) {
+        drawSoftKeys("", "START");
+      } else {
+        drawSoftKeys("RESET", "START");
+      }
     }
   }
 
