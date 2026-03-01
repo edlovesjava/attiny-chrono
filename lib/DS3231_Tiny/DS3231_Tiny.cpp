@@ -41,6 +41,22 @@ void rtcSetAlarm(uint8_t hour, uint8_t min) {
   rtcClearAlarm();
 }
 
+bool rtcReadAlarm(uint8_t &hour, uint8_t &min) {
+  // Read alarm 1 min (0x08) and hour (0x09)
+  TinyWireM.beginTransmission(DS3231_ADDR);
+  TinyWireM.write(0x08);
+  TinyWireM.endTransmission();
+  TinyWireM.requestFrom(DS3231_ADDR, 2);
+  min  = bcdToDec(TinyWireM.read() & 0x7F);
+  hour = bcdToDec(TinyWireM.read() & 0x3F);
+  // Check A1IE in control register (0x0E bit 0)
+  TinyWireM.beginTransmission(DS3231_ADDR);
+  TinyWireM.write(0x0E);
+  TinyWireM.endTransmission();
+  TinyWireM.requestFrom(DS3231_ADDR, 1);
+  return TinyWireM.read() & 0x01;
+}
+
 void rtcDisableAlarm() {
   // INTCN=1, A1IE=0
   TinyWireM.beginTransmission(DS3231_ADDR);

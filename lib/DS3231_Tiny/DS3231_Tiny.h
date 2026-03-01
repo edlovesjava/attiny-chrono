@@ -11,6 +11,7 @@ void rtcWrite(uint8_t hour, uint8_t min, uint8_t sec);
 
 // Alarm 1 (matches on hour:min:00 daily)
 void rtcSetAlarm(uint8_t hour, uint8_t min);
+bool rtcReadAlarm(uint8_t &hour, uint8_t &min);
 void rtcDisableAlarm();
 bool rtcCheckAlarm();
 void rtcClearAlarm();

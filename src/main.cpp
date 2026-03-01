@@ -1,8 +1,10 @@
 #include <avr/sleep.h>
 #include <avr/interrupt.h>
+#include <avr/wdt.h>
 #include <TinyWireM.h>
 #include <Tiny4kOLED.h>
 #include <DS3231_Tiny.h>
+#include "font_chrono.h"
 
 #define BTN_SET   PB3
 #define BTN_START PB4
@@ -65,6 +67,7 @@ enum SubState { SUB_IDLE, SUB_SETTING, SUB_RUNNING, SUB_DONE };
 Mode currentMode = MODE_TIMER;
 SubState subState = SUB_IDLE;
 bool isSleeping = false;
+bool clockLowPower = false;
 
 uint16_t targetSeconds = 0;
 uint16_t currentSeconds = 0;
@@ -79,6 +82,11 @@ uint8_t rtcHour, rtcMin, rtcSec;
 
 uint8_t alarmHour = 0, alarmMin = 0;
 bool alarmEnabled = false;
+
+uint8_t settingField;             // 0=hour, 1=min
+uint8_t settingHour, settingMin;  // temp values during edit
+bool settingAlarm;                // true=alarm, false=clock
+bool alarmFired = false;          // prevent re-trigger within same minute
 
 void goToSleep() {
   oled.off();
@@ -99,6 +107,25 @@ ISR(PCINT0_vect) {
   wakeFlag = true;
 }
 
+ISR(WDT_vect) {
+  // Just wakes CPU. WDIE auto-clears.
+}
+
+void clockSleep() {
+  // Enable PCINT for button wake
+  GIMSK |= _BV(PCIE);
+  PCMSK |= _BV(PCINT3) | _BV(PCINT4);
+  // Enable WDT interrupt, ~1s
+  cli();
+  WDTCR |= _BV(WDCE) | _BV(WDE);
+  WDTCR = _BV(WDIE) | _BV(WDP2) | _BV(WDP1);
+  sei();
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+  sleep_cpu();
+  sleep_disable();
+}
+
 void setup() {
   pinMode(BTN_SET, INPUT_PULLUP);
   pinMode(BTN_START, INPUT_PULLUP);
@@ -107,15 +134,22 @@ void setup() {
 
   TinyWireM.begin();
   oled.begin(128, 64, sizeof(tiny4koled_init_128x64br), tiny4koled_init_128x64br);
-  oled.setFont(FONT8X16);
+  oled.setFont(FONT_CHRONO);
   oled.clear();
   oled.on();
+  alarmEnabled = rtcReadAlarm(alarmHour, alarmMin);
+  rtcClearAlarm();  // ensure SQW is HIGH on boot
 }
 
 void beep() {
   digitalWrite(BUZZER, LOW);
   delay(150);
   digitalWrite(BUZZER, HIGH);
+}
+
+void print2(uint8_t val) {
+  if (val < 10) oled.print("0");
+  oled.print(val);
 }
 
 void drawSoftKeys(const char* left, const char* right) {
@@ -140,22 +174,20 @@ void updateDisplay() {
     oled.print("STOPWTCH");
   }
 
-  // Sub-state indicator (right-aligned)
-  oled.setCursor(88, 0);
-  if (subState == SUB_SETTING) oled.print("SET");
-  else if (subState == SUB_RUNNING) oled.print("RUN");
-  else if (subState == SUB_DONE) oled.print("DONE");
+  // Current time in upper right (timer/stopwatch only)
+  if (currentMode == MODE_TIMER || currentMode == MODE_STOPWATCH) {
+    oled.setCursor(88, 0);
+    print2(rtcHour);
+    oled.print(":");
+    print2(rtcMin);
+  }
 
   if (currentMode == MODE_TIMER) {
     oled.setCursor(0, 3);
     uint16_t t = (subState == SUB_RUNNING) ? currentSeconds : targetSeconds;
-    uint8_t mins = t / 60;
-    uint8_t secs = t % 60;
-    if (mins < 10) oled.print("0");
-    oled.print(mins);
+    print2(t / 60);
     oled.print(":");
-    if (secs < 10) oled.print("0");
-    oled.print(secs);
+    print2(t % 60);
 
     // Soft-key labels for timer mode
     if (subState == SUB_DONE) {
@@ -180,25 +212,16 @@ void updateDisplay() {
     uint16_t t = (uint16_t)(totalMs / 1000);
 
     oled.setCursor(0, 3);
-    uint8_t mins = t / 60;
-    uint8_t secs = t % 60;
-    if (mins < 10) oled.print("0");
-    oled.print(mins);
+    print2(t / 60);
     oled.print(":");
-    if (secs < 10) oled.print("0");
-    oled.print(secs);
+    print2(t % 60);
 
-    // Lap time (moved to row 5 to make room for soft-keys)
     if (swLapVisible) {
       oled.setCursor(0, 5);
       oled.print("LAP ");
-      uint8_t lm = swLapSecs / 60;
-      uint8_t ls = swLapSecs % 60;
-      if (lm < 10) oled.print("0");
-      oled.print(lm);
+      print2(swLapSecs / 60);
       oled.print(":");
-      if (ls < 10) oled.print("0");
-      oled.print(ls);
+      print2(swLapSecs % 60);
     }
 
     // Soft-key labels for stopwatch mode
@@ -215,33 +238,52 @@ void updateDisplay() {
   }
 
   if (currentMode == MODE_CLOCK) {
-    oled.setCursor(0, 0);
-    oled.print("CLOCK");
-
-    if (alarmEnabled) {
-      oled.setCursor(64, 0);
-      oled.print("A");
-      if (alarmHour < 10) oled.print("0");
-      oled.print(alarmHour);
+    if (subState == SUB_DONE) {
+      oled.setCursor(0, 0);
+      oled.print("* ALARM *");
+      oled.setCursor(0, 3);
+      print2(alarmHour);
       oled.print(":");
-      if (alarmMin < 10) oled.print("0");
-      oled.print(alarmMin);
-    }
-
-    oled.setCursor(0, 3);
-    if (rtcHour < 10) oled.print("0");
-    oled.print(rtcHour);
-    oled.print(":");
-    if (rtcMin < 10) oled.print("0");
-    oled.print(rtcMin);
-    oled.print(":");
-    if (rtcSec < 10) oled.print("0");
-    oled.print(rtcSec);
-
-    if (alarmEnabled) {
-      drawSoftKeys("TIME", "OFF");
+      print2(alarmMin);
+      drawSoftKeys("OK", "OK");
+    } else if (subState == SUB_SETTING) {
+      oled.setCursor(0, 0);
+      if (settingAlarm) {
+        oled.print(settingField == 0 ? "ALM HR" : "ALM MIN");
+      } else {
+        oled.print(settingField == 0 ? "SET HOUR" : "SET MIN");
+      }
+      oled.setCursor(0, 3);
+      print2((settingField == 0) ? settingHour : settingMin);
+      oled.setCursor(64, 3);
+      print2(settingHour);
+      oled.print(":");
+      print2(settingMin);
+      drawSoftKeys("+1", "-1   OK>");
     } else {
-      drawSoftKeys("TIME", "ALARM");
+      oled.setCursor(0, 0);
+      oled.print("CLOCK");
+
+      if (alarmEnabled) {
+        oled.setCursor(64, 0);
+        oled.print("A");
+        print2(alarmHour);
+        oled.print(":");
+        print2(alarmMin);
+      }
+
+      oled.setCursor(0, 3);
+      print2(rtcHour);
+      oled.print(":");
+      print2(rtcMin);
+      oled.print(":");
+      print2(rtcSec);
+
+      if (alarmEnabled) {
+        drawSoftKeys("TIME", "OFF");
+      } else {
+        drawSoftKeys("TIME", "ALARM");
+      }
     }
   }
 
@@ -253,6 +295,38 @@ void loop() {
     goToSleep();
   }
 
+  // Clock low-power mode: MCU sleeps, wakes every ~1s to update time
+  if (clockLowPower) {
+    if (wakeFlag) {
+      // Button press or SQW: full wake
+      wakeFlag = false;
+      clockLowPower = false;
+      wdt_disable();
+      btnA = { BTN_SET,   false, false, 0, false };
+      btnB = { BTN_START, false, false, 0, false };
+      TinyWireM.begin();
+      rtcClearAlarm();  // release SQW so PB4 reads HIGH
+      oled.begin(128, 64, sizeof(tiny4koled_init_128x64br), tiny4koled_init_128x64br);
+      oled.setFont(FONT_CHRONO);
+      oled.on();
+      lastActivity = millis();
+      rtcRead(rtcHour, rtcMin, rtcSec);
+      updateDisplay();
+    } else {
+      // WDT wake: update time only, sleep again
+      TinyWireM.begin();
+      rtcRead(rtcHour, rtcMin, rtcSec);
+      oled.setCursor(0, 3);
+      print2(rtcHour);
+      oled.print(":");
+      print2(rtcMin);
+      oled.print(":");
+      print2(rtcSec);
+      clockSleep();
+    }
+    return;
+  }
+
   if (wakeFlag) {
     wakeFlag = false;
     isSleeping = false;
@@ -260,8 +334,9 @@ void loop() {
     btnA = { BTN_SET,   false, false, 0, false };
     btnB = { BTN_START, false, false, 0, false };
     TinyWireM.begin();
+    rtcClearAlarm();  // release SQW so PB4 reads HIGH
     oled.begin(128, 64, sizeof(tiny4koled_init_128x64br), tiny4koled_init_128x64br);
-    oled.setFont(FONT8X16);
+    oled.setFont(FONT_CHRONO);
     oled.on();
     lastActivity = millis();
     rtcRead(rtcHour, rtcMin, rtcSec);
@@ -271,8 +346,8 @@ void loop() {
   ButtonEvent evtA = readButton(btnA);
   ButtonEvent evtB = readButton(btnB);
 
-  // Mode cycling (works in any mode)
-  if (evtA == EVT_LONG) {
+  // Mode cycling (only from idle)
+  if (evtA == EVT_LONG && subState == SUB_IDLE) {
     currentMode = (Mode)((currentMode + 1) % MODE_COUNT);
     subState = SUB_IDLE;
     targetSeconds = 0;
@@ -280,6 +355,7 @@ void loop() {
     swAccum = 0;
     swLapSecs = 0;
     swLapVisible = false;
+    alarmFired = false;
     lastActivity = millis();
     beep();
     updateDisplay();
@@ -378,18 +454,116 @@ void loop() {
     }
   }
 
-  // Clock mode: read RTC and refresh display at 1Hz
-  if (currentMode == MODE_CLOCK && subState == SUB_IDLE) {
-    static uint32_t lastClockRefresh = 0;
-    if (millis() - lastClockRefresh >= 1000) {
-      lastClockRefresh = millis();
-      rtcRead(rtcHour, rtcMin, rtcSec);
-      updateDisplay();
+  if (currentMode == MODE_CLOCK) {
+    if (subState == SUB_IDLE) {
+      if (evtA == EVT_SHORT) {
+        // Enter time-setting
+        rtcRead(rtcHour, rtcMin, rtcSec);
+        settingHour = rtcHour;
+        settingMin = rtcMin;
+        settingField = 0;
+        settingAlarm = false;
+        subState = SUB_SETTING;
+        lastActivity = millis();
+        updateDisplay();
+      }
+      if (evtB == EVT_SHORT) {
+        if (alarmEnabled) {
+          alarmEnabled = false;
+          rtcDisableAlarm();
+        } else {
+          settingHour = alarmHour;
+          settingMin = alarmMin;
+          settingField = 0;
+          settingAlarm = true;
+          subState = SUB_SETTING;
+        }
+        lastActivity = millis();
+        updateDisplay();
+      }
+    }
+    else if (subState == SUB_SETTING) {
+      // Unified setting handler (clock or alarm)
+      if (evtA == EVT_SHORT) {
+        if (settingField == 0) settingHour = (settingHour + 1) % 24;
+        else settingMin = (settingMin + 1) % 60;
+        lastActivity = millis();
+        updateDisplay();
+      }
+      if (evtB == EVT_SHORT) {
+        if (settingField == 0) settingHour = (settingHour == 0) ? 23 : settingHour - 1;
+        else settingMin = (settingMin == 0) ? 59 : settingMin - 1;
+        lastActivity = millis();
+        updateDisplay();
+      }
+      if (evtA == EVT_LONG) {
+        // Cancel
+        subState = SUB_IDLE;
+        lastActivity = millis();
+        rtcRead(rtcHour, rtcMin, rtcSec);
+        updateDisplay();
+      }
+      if (evtB == EVT_LONG) {
+        if (settingField == 0) {
+          settingField = 1;
+          beep();
+        } else {
+          // Save
+          if (settingAlarm) {
+            alarmHour = settingHour;
+            alarmMin = settingMin;
+            alarmEnabled = true;
+            rtcSetAlarm(alarmHour, alarmMin);
+          } else {
+            rtcWrite(settingHour, settingMin, 0);
+          }
+          subState = SUB_IDLE;
+          beep();
+          rtcRead(rtcHour, rtcMin, rtcSec);
+        }
+        lastActivity = millis();
+        updateDisplay();
+      }
+    }
+    else if (subState == SUB_DONE) {
+      if (evtA != EVT_NONE || evtB != EVT_NONE) {
+        subState = SUB_IDLE;
+        lastActivity = millis();
+        rtcRead(rtcHour, rtcMin, rtcSec);
+        updateDisplay();
+      }
     }
   }
 
-  // Repeating alarm when timer is done
-  if (currentMode == MODE_TIMER && subState == SUB_DONE) {
+  // 1Hz RTC read (all modes); auto-refresh display in clock idle
+  {
+    static uint32_t lastRtcRead = 0;
+    if (millis() - lastRtcRead >= 1000) {
+      lastRtcRead = millis();
+      rtcRead(rtcHour, rtcMin, rtcSec);
+      if (currentMode == MODE_CLOCK && subState == SUB_IDLE) {
+        updateDisplay();
+      }
+    }
+  }
+
+  // Clock alarm check
+  if (currentMode == MODE_CLOCK && subState == SUB_IDLE && alarmEnabled) {
+    if (rtcHour == alarmHour && rtcMin == alarmMin) {
+      if (!alarmFired) {
+        alarmFired = true;
+        rtcClearAlarm();  // release SQW so PB4 reads HIGH
+        subState = SUB_DONE;
+        beep();
+        updateDisplay();
+      }
+    } else {
+      alarmFired = false;
+    }
+  }
+
+  // Repeating alarm beep (timer done or clock alarm)
+  if ((currentMode == MODE_TIMER || currentMode == MODE_CLOCK) && subState == SUB_DONE) {
     static uint32_t lastAlarmBeep = 0;
     if (millis() - lastAlarmBeep >= 2000) {
       beep();
@@ -397,12 +571,31 @@ void loop() {
     }
   }
 
-  // Auto-sleep after 15s inactivity (never during running/alarm)
+  // Auto-sleep after 15s inactivity (never during running/alarm/setting)
   if (millis() - lastActivity > 15000 &&
       subState != SUB_RUNNING &&
       subState != SUB_DONE &&
-      currentMode != MODE_CLOCK) {
-    isSleeping = true;
-    goToSleep();
+      subState != SUB_SETTING) {
+    if (currentMode == MODE_CLOCK) {
+      // Clock low-power: show only time, sleep between updates
+      clockLowPower = true;
+      oled.clear();
+      if (alarmEnabled) {
+        oled.setCursor(0, 0);
+        oled.print("A");
+      }
+      oled.setCursor(0, 3);
+      rtcRead(rtcHour, rtcMin, rtcSec);
+      print2(rtcHour);
+      oled.print(":");
+      print2(rtcMin);
+      oled.print(":");
+      print2(rtcSec);
+      oled.on();
+      clockSleep();
+    } else {
+      isSleeping = true;
+      goToSleep();
+    }
   }
 }
