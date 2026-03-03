@@ -311,6 +311,11 @@ void loop() {
       oled.on();
       lastActivity = millis();
       rtcRead(rtcHour, rtcMin, rtcSec);
+      if (alarmEnabled && rtcCheckAlarm()) {
+        rtcClearAlarm();
+        subState = SUB_DONE;
+        beep();
+      }
       updateDisplay();
     } else {
       // WDT wake: update time only, sleep again
@@ -330,7 +335,6 @@ void loop() {
   if (wakeFlag) {
     wakeFlag = false;
     isSleeping = false;
-    subState = SUB_IDLE;
     btnA = { BTN_SET,   false, false, 0, false };
     btnB = { BTN_START, false, false, 0, false };
     TinyWireM.begin();
@@ -340,7 +344,27 @@ void loop() {
     oled.on();
     lastActivity = millis();
     rtcRead(rtcHour, rtcMin, rtcSec);
+    if (alarmEnabled && rtcCheckAlarm()) {
+      rtcClearAlarm();
+      subState = SUB_DONE;
+      beep();
+    } else {
+      subState = SUB_IDLE;
+    }
     updateDisplay();
+  }
+
+  // Hardware alarm: DS3231 SQW pulls PB4 LOW via diode-OR
+  if (alarmEnabled && subState != SUB_DONE && !digitalRead(BTN_START)) {
+    if (rtcCheckAlarm()) {
+      rtcClearAlarm();
+      btnB = { BTN_START, false, false, 0, false };  // prevent phantom press
+      alarmFired = true;
+      subState = SUB_DONE;
+      rtcRead(rtcHour, rtcMin, rtcSec);
+      beep();
+      updateDisplay();
+    }
   }
 
   ButtonEvent evtA = readButton(btnA);
@@ -358,6 +382,15 @@ void loop() {
     alarmFired = false;
     lastActivity = millis();
     beep();
+    updateDisplay();
+  }
+
+  // Global alarm dismiss (any mode)
+  if (subState == SUB_DONE && alarmEnabled &&
+      (evtA != EVT_NONE || evtB != EVT_NONE)) {
+    alarmFired = false;
+    subState = SUB_IDLE;
+    lastActivity = millis();
     updateDisplay();
   }
 
@@ -525,14 +558,6 @@ void loop() {
         updateDisplay();
       }
     }
-    else if (subState == SUB_DONE) {
-      if (evtA != EVT_NONE || evtB != EVT_NONE) {
-        subState = SUB_IDLE;
-        lastActivity = millis();
-        rtcRead(rtcHour, rtcMin, rtcSec);
-        updateDisplay();
-      }
-    }
   }
 
   // 1Hz RTC read (all modes); auto-refresh display in clock idle
@@ -547,23 +572,8 @@ void loop() {
     }
   }
 
-  // Clock alarm check
-  if (currentMode == MODE_CLOCK && subState == SUB_IDLE && alarmEnabled) {
-    if (rtcHour == alarmHour && rtcMin == alarmMin) {
-      if (!alarmFired) {
-        alarmFired = true;
-        rtcClearAlarm();  // release SQW so PB4 reads HIGH
-        subState = SUB_DONE;
-        beep();
-        updateDisplay();
-      }
-    } else {
-      alarmFired = false;
-    }
-  }
-
   // Repeating alarm beep (timer done or clock alarm)
-  if ((currentMode == MODE_TIMER || currentMode == MODE_CLOCK) && subState == SUB_DONE) {
+  if (subState == SUB_DONE) {
     static uint32_t lastAlarmBeep = 0;
     if (millis() - lastAlarmBeep >= 2000) {
       beep();
