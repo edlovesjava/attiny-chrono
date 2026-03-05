@@ -167,11 +167,11 @@ void updateDisplay() {
   oled.clear();
   oled.setCursor(0, 0);
 
-  // Mode name
+  // Mode icon
   if (currentMode == MODE_TIMER) {
-    oled.print("TIMER");
+    oled.print("!");       // hourglass
   } else if (currentMode == MODE_STOPWATCH) {
-    oled.print("STOPWTCH");
+    oled.print("\x22");    // stopwatch
   }
 
   // Current time in upper right (timer/stopwatch only)
@@ -189,17 +189,15 @@ void updateDisplay() {
     oled.print(":");
     print2(t % 60);
 
-    // Soft-key labels for timer mode
     if (subState == SUB_DONE) {
-      drawSoftKeys("OK", "OK");
+      drawSoftKeys("%", "%");        // check / check
     } else if (subState == SUB_RUNNING) {
-      drawSoftKeys("", "STOP>");
+      drawSoftKeys("", ")");         // _ / stop
     } else {
-      // IDLE or SETTING
       if (targetSeconds == 0) {
-        drawSoftKeys("+1m", "");
+        drawSoftKeys("&", "");       // up / _
       } else {
-        drawSoftKeys("+1m", "-1m  GO>");
+        drawSoftKeys("&", "'(");     // up / down+play
       }
     }
   }
@@ -218,21 +216,19 @@ void updateDisplay() {
 
     if (swLapVisible) {
       oled.setCursor(0, 5);
-      oled.print("LAP ");
+      oled.print(", ");              // flag + space
       print2(swLapSecs / 60);
       oled.print(":");
       print2(swLapSecs % 60);
     }
 
-    // Soft-key labels for stopwatch mode
     if (subState == SUB_RUNNING) {
-      drawSoftKeys("LAP", "STOP");
+      drawSoftKeys(",", ")");        // flag / stop
     } else {
-      // IDLE
       if (swAccum == 0) {
-        drawSoftKeys("", "START");
+        drawSoftKeys("", "(");       // _ / play
       } else {
-        drawSoftKeys("RESET", "START");
+        drawSoftKeys(".", "(");      // reset / play
       }
     }
   }
@@ -240,33 +236,30 @@ void updateDisplay() {
   if (currentMode == MODE_CLOCK) {
     if (subState == SUB_DONE) {
       oled.setCursor(0, 0);
-      oled.print("* ALARM *");
+      oled.print("$");               // bell
       oled.setCursor(0, 3);
       print2(alarmHour);
       oled.print(":");
       print2(alarmMin);
-      drawSoftKeys("OK", "OK");
+      drawSoftKeys("%", "%");        // check / check
     } else if (subState == SUB_SETTING) {
       oled.setCursor(0, 0);
-      if (settingAlarm) {
-        oled.print(settingField == 0 ? "ALM HR" : "ALM MIN");
-      } else {
-        oled.print(settingField == 0 ? "SET HOUR" : "SET MIN");
-      }
-      oled.setCursor(0, 3);
-      print2((settingField == 0) ? settingHour : settingMin);
-      oled.setCursor(64, 3);
+      oled.print(settingAlarm ? "$" : "#"); // bell or clock icon
+      oled.setCursor(0, 2);
       print2(settingHour);
       oled.print(":");
       print2(settingMin);
-      drawSoftKeys("+1", "-1   OK>");
+      // Caret under the field being edited
+      oled.setCursor(settingField == 0 ? 0 : 24, 4);
+      oled.print("--");             // two caret indicators
+      drawSoftKeys("&", "'%");      // up / down+check
     } else {
       oled.setCursor(0, 0);
-      oled.print("CLOCK");
+      oled.print("#");               // clock
 
       if (alarmEnabled) {
         oled.setCursor(64, 0);
-        oled.print("A");
+        oled.print("$");             // bell
         print2(alarmHour);
         oled.print(":");
         print2(alarmMin);
@@ -280,9 +273,9 @@ void updateDisplay() {
       print2(rtcSec);
 
       if (alarmEnabled) {
-        drawSoftKeys("TIME", "OFF");
+        drawSoftKeys("#", "/");      // clock / xmark
       } else {
-        drawSoftKeys("TIME", "ALARM");
+        drawSoftKeys("#", "$");      // clock / bell
       }
     }
   }
@@ -305,7 +298,6 @@ void loop() {
       btnA = { BTN_SET,   false, false, 0, false };
       btnB = { BTN_START, false, false, 0, false };
       TinyWireM.begin();
-      rtcClearAlarm();  // release SQW so PB4 reads HIGH
       oled.begin(128, 64, sizeof(tiny4koled_init_128x64br), tiny4koled_init_128x64br);
       oled.setFont(FONT_CHRONO);
       oled.on();
@@ -315,6 +307,8 @@ void loop() {
         rtcClearAlarm();
         subState = SUB_DONE;
         beep();
+      } else {
+        rtcClearAlarm();
       }
       updateDisplay();
     } else {
@@ -338,7 +332,6 @@ void loop() {
     btnA = { BTN_SET,   false, false, 0, false };
     btnB = { BTN_START, false, false, 0, false };
     TinyWireM.begin();
-    rtcClearAlarm();  // release SQW so PB4 reads HIGH
     oled.begin(128, 64, sizeof(tiny4koled_init_128x64br), tiny4koled_init_128x64br);
     oled.setFont(FONT_CHRONO);
     oled.on();
@@ -349,6 +342,7 @@ void loop() {
       subState = SUB_DONE;
       beep();
     } else {
+      rtcClearAlarm();
       subState = SUB_IDLE;
     }
     updateDisplay();
@@ -592,7 +586,7 @@ void loop() {
       oled.clear();
       if (alarmEnabled) {
         oled.setCursor(0, 0);
-        oled.print("A");
+        oled.print("$");
       }
       oled.setCursor(0, 3);
       rtcRead(rtcHour, rtcMin, rtcSec);
