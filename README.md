@@ -47,6 +47,11 @@ This library represents an ATtiny85 configured as a chronograph / timer
    - clock (24/12)
    - clock on always, clock sleep
 
+## Project-internal libraries / techniques
+
+- [`lib/DS3231_Tiny/`](lib/DS3231_Tiny/README.md) — minimal DS3231 RTC driver (vs ~2 KB for RTClib)
+- [`docs/custom-font.md`](docs/custom-font.md) — shrinking Tiny4kOLED's font from 1520 → 432 bytes and reusing punctuation slots as icons
+
 ## Two button operation
 - Menu/set flow
   - Long A - mode menu,
